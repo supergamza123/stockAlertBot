@@ -123,7 +123,26 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ## 커스터마이징
 
 - **명령어 접두사 변경**: `.env`의 `COMMAND_PREFIX` 값을 수정 (기본 `!`)
-- **한국 종목명 추가**: `bot.py`의 `KR_NAME_TO_CODE` 딕셔너리에 `"종목명": "종목코드"` 추가
+- **종목 별칭 추가**: `data/kr_aliases.json` 에 `"별칭": "종목코드"` 또는 `"별칭": "AAPL"` 추가 후 `bot-restart`
+- **공식 종목명 목록**: `data/kr_stocks.json` — GitHub Actions가 **매주 KRX에서 자동 갱신**
+- **칼리스토 밈 응답 문구**: `data/callisto_templates.json` — 림갤 주식 밈(영웅호걸·절호의 찬스·그만 떨어지십시오 등) + PM 세계관. `subtitle` 배열은 랜덤. `_meme_refs` 참고
+
+### 종목명 JSON 구조
+
+| 파일 | 내용 | 수정 |
+|---|---|---|
+| `data/kr_aliases.json` | 삼전, 테슬라 등 **별칭** | ✋ 수동 편집 |
+| `data/kr_stocks.json` | KRX 상장 **공식 종목명** 전체 | 🤖 Actions 자동 |
+
+로컬에서 종목 목록 수동 갱신:
+
+```bash
+pip install -r scripts/requirements.txt
+python scripts/update_kr_stocks.py
+```
+
+GitHub Actions: `.github/workflows/update-kr-stocks.yml` — 매주 월요일 09:00 KST + 수동 실행(`workflow_dispatch`)
+
 
 ## 참고
 
