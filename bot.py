@@ -27,6 +27,13 @@ from matplotlib import font_manager
 
 from toss_client import TossClient, TossAPIError
 import store
+from stock_map import lookup_code, reload_name_map
+from callisto_style import (
+    build_quote_embed,
+    build_chart_embed,
+    build_portfolio_embed,
+    not_found_message,
+)
 
 
 def _setup_korean_font() -> bool:
@@ -103,47 +110,19 @@ def load_portfolio(user_id: int | str) -> dict:
         "total_profit": total_profit,
     }
 
-# 자주 쓰는 한국 종목 이름 -> 종목코드 매핑 (원하는 만큼 추가하세요)
-KR_NAME_TO_CODE = {
-    "삼성전자": "005930",
-    "삼성전자우": "005935",
-    "sk하이닉스": "000660",
-    "하이닉스": "000660",
-    "lg에너지솔루션": "373220",
-    "엘지에너지솔루션": "373220",
-    "삼성바이오로직스": "207940",
-    "현대차": "005380",
-    "현대자동차": "005380",
-    "기아": "000270",
-    "네이버": "035420",
-    "naver": "035420",
-    "카카오": "035720",
-    "셀트리온": "068270",
-    "kb금융": "105560",
-    "신한지주": "055550",
-    "포스코홀딩스": "005490",
-    "posco홀딩스": "005490",
-    "lg화학": "051910",
-    "삼성sdi": "006400",
-    "현대모비스": "012330",
-    "에코프로": "086520",
-    "에코프로비엠": "247540",
-}
+# 종목명/별칭 → 코드 매핑: data/kr_aliases.json (수동) + data/kr_stocks.json (자동)
+# 별칭 추가: data/kr_aliases.json 편집 후 bot-restart
 
 
 def resolve_symbols(query: str) -> list[str]:
-    """사용자 입력을 yfinance 티커 후보 목록으로 변환.
-
-    - 한국 종목명 -> 코드 매핑 후 .KS / .KQ 순서로 시도
-    - 6자리 숫자 -> 한국 종목코드로 간주, .KS / .KQ 시도
-    - 그 외 -> 미국 티커로 그대로 사용 (대문자)
-    """
+    """사용자 입력을 yfinance 티커 후보 목록으로 변환."""
     q = query.strip()
-    key = q.lower().replace(" ", "")
+    code = lookup_code(q)
 
-    if key in KR_NAME_TO_CODE:
-        code = KR_NAME_TO_CODE[key]
-        return [f"{code}.KS", f"{code}.KQ"]
+    if code:
+        if code.isdigit() and len(code) == 6:
+            return [f"{code}.KS", f"{code}.KQ"]
+        return [code.upper()]
 
     if q.isdigit() and len(q) == 6:
         return [f"{q}.KS", f"{q}.KQ"]
@@ -313,36 +292,10 @@ async def stock(ctx: commands.Context, *, query: str = ""):
         data = await asyncio.to_thread(fetch_quote, query)
 
     if data is None:
-        await ctx.send(f"⚠️ `{query}` 종목을 찾을 수 없어요. 종목코드(예: 005930)나 미국 티커(예: AAPL)로 시도해 보세요.")
+        await ctx.send(not_found_message(query))
         return
 
-    up = data["change"] >= 0
-    color = discord.Color.red() if up else discord.Color.blue()  # 한국식: 상승 빨강, 하락 파랑
-    arrow = "🔺" if data["change"] > 0 else ("🔻" if data["change"] < 0 else "➖")
-    sign = "+" if up else ""
-
-    embed = discord.Embed(
-        title=f"{arrow} {data['name']}",
-        description=f"`{data['symbol']}`",
-        color=color,
-    )
-    embed.add_field(
-        name="현재가",
-        value=format_price(data["price"], data["currency"]),
-        inline=True,
-    )
-    embed.add_field(
-        name="등락",
-        value=f"{sign}{format_price(data['change'], data['currency'])} ({sign}{data['change_pct']:.2f}%)",
-        inline=True,
-    )
-    embed.add_field(
-        name="전일 종가",
-        value=format_price(data["prev_close"], data["currency"]),
-        inline=True,
-    )
-    embed.set_footer(text="데이터: Yahoo Finance · 실시간과 다소 차이가 있을 수 있습니다")
-
+    embed = build_quote_embed(data, format_price)
     await ctx.send(embed=embed)
 
 
@@ -360,28 +313,11 @@ async def chart(ctx: commands.Context, query: str = "", period_key: str = "3mo")
         result = await asyncio.to_thread(generate_chart, query, period_key)
 
     if result is None:
-        await ctx.send(
-            f"⚠️ `{query}` 종목의 차트를 만들 수 없어요. 종목코드(예: 005930)나 미국 티커(예: AAPL)로 시도해 보세요."
-        )
+        await ctx.send(not_found_message(query))
         return
 
     buf, data = result
-    up = data["up"]
-    color = discord.Color.red() if up else discord.Color.blue()
-    arrow = "🔺" if up else "🔻"
-    sign = "+" if up else ""
-
-    embed = discord.Embed(
-        title=f"{arrow} {data['name']} · {data['period_label']} 추이",
-        description=f"`{data['symbol']}`",
-        color=color,
-    )
-    embed.add_field(name="현재가", value=format_price(data["last"], data["currency"]), inline=True)
-    embed.add_field(
-        name=f"{data['period_label']} 변동",
-        value=f"{sign}{data['change_pct']:.2f}%",
-        inline=True,
-    )
+    embed = build_chart_embed(data, format_price)
 
     file = discord.File(buf, filename="chart.png")
     embed.set_image(url="attachment://chart.png")
@@ -459,42 +395,32 @@ async def portfolio(ctx: commands.Context):
         await ctx.send("📭 보유 중인 종목이 없어요.")
         return
 
-    up = data["total_profit"] >= 0
-    color = discord.Color.red() if up else discord.Color.blue()
-    sign = "+" if up else ""
-
-    embed = discord.Embed(
-        title=f"💼 {ctx.author.display_name} 님의 보유 종목",
-        description=f"계좌: `{data['account']}`",
-        color=color,
+    embed = build_portfolio_embed(
+        ctx.author.display_name,
+        data["account"],
+        holdings,
+        data["total_eval"],
+        data["total_profit"],
+        format_price,
     )
-
-    # 평가금액 큰 순으로 정렬, 최대 20개 표시
-    for h in sorted(holdings, key=lambda x: x["eval_amount"], reverse=True)[:20]:
-        p_sign = "+" if h["profit"] >= 0 else ""
-        arrow = "🔺" if h["profit"] > 0 else ("🔻" if h["profit"] < 0 else "➖")
-        value_lines = (
-            f"{h['quantity']:,.0f}주 · 평가 {format_price(h['eval_amount'], h['currency'])}\n"
-            f"{arrow} {p_sign}{format_price(h['profit'], h['currency'])} "
-            f"({p_sign}{h['profit_rate']:.2f}%)"
-        )
-        embed.add_field(name=h["name"] or h["symbol"], value=value_lines, inline=True)
-
-    embed.add_field(
-        name="─ 합계 ─",
-        value=(
-            f"총 평가금액: **{format_price(data['total_eval'], 'KRW')}**\n"
-            f"총 손익: {sign}{format_price(data['total_profit'], 'KRW')}"
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="데이터: 토스증권 Open API")
     await ctx.send(embed=embed)
+
+
+@bot.command(name="종목갱신", aliases=["reload-stocks"])
+@commands.is_owner()
+async def reload_stocks(ctx: commands.Context):
+    """JSON 종목 매핑을 다시 읽습니다. (봇 소유자 전용)"""
+    await asyncio.to_thread(reload_name_map)
+    await ctx.send("✅ 종목 매핑을 다시 불러왔어요. (`data/kr_aliases.json`, `data/kr_stocks.json`)")
 
 
 @bot.command(name="도움말", aliases=["help", "명령어"])
 async def help_cmd(ctx: commands.Context):
-    embed = discord.Embed(title="📈 주식 봇 명령어", color=discord.Color.green())
+    embed = discord.Embed(
+        title="📈 주식 봇 명령어",
+        description="*마에스트로 칼리스토가 시세를 읽어 드립니다. 팔 타이밍은… 보장 못 합니다.*",
+        color=discord.Color.from_rgb(0x4A90D9),
+    )
     embed.add_field(
         name=f"{PREFIX}주가 <종목>",
         value=(
@@ -522,6 +448,14 @@ async def help_cmd(ctx: commands.Context):
     embed.add_field(
         name=f"{PREFIX}내주식",
         value="등록한 토스 계좌의 보유 종목과 평가금액/손익을 보여줍니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="종목명 검색",
+        value=(
+            "한국: **공식 종목명** 또는 **별칭**(삼전, 하이닉스 등) · **6자리 코드**\n"
+            "미국: **티커** 또는 **별칭**(테슬라, 애플 등) · 띄어쓰기/대소문자 무관"
+        ),
         inline=False,
     )
     embed.add_field(name=f"{PREFIX}도움말", value="이 도움말을 표시합니다.", inline=False)
