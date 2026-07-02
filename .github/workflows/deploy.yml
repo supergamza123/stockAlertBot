@@ -21,14 +21,15 @@ jobs:
         run: |
           KEY_FILE="$RUNNER_TEMP/deploy_key"
           if [ -n "$SSH_KEY_B64" ]; then
-            echo "$SSH_KEY_B64" | base64 -d > "$KEY_FILE"
+            echo "$SSH_KEY_B64" | base64 -d | tr -d '\r' > "$KEY_FILE"
           elif [ -n "$SSH_KEY" ]; then
-            printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+            printf '%s\n' "$SSH_KEY" | tr -d '\r' > "$KEY_FILE"
           else
             echo "DEPLOY_SSH_KEY 또는 DEPLOY_SSH_KEY_B64 Secret이 필요합니다." >&2
             exit 1
           fi
           chmod 600 "$KEY_FILE"
+          ssh-keygen -y -f "$KEY_FILE" > /dev/null
           echo "key_file=$KEY_FILE" >> "$GITHUB_OUTPUT"
         id: ssh_key
 
@@ -39,34 +40,39 @@ jobs:
           DEPLOY_GITHUB_TOKEN_B64: ${{ secrets.DEPLOY_GITHUB_TOKEN_B64 }}
           GITHUB_REPO: ${{ github.repository }}
         with:
-          host: ${{ vars.DEPLOY_HOST }}
-          username: ${{ vars.DEPLOY_USER }}
+          host: ${{ vars.DEPLOY_HOST || secrets.DEPLOY_HOST }}
+          username: ${{ vars.DEPLOY_USER || secrets.DEPLOY_USER }}
           key_path: ${{ steps.ssh_key.outputs.key_file }}
-          port: ${{ vars.DEPLOY_PORT != '' && vars.DEPLOY_PORT || 22 }}
+          port: ${{ vars.DEPLOY_PORT != '' && vars.DEPLOY_PORT || secrets.DEPLOY_PORT || 22 }}
           envs: DEPLOY_GITHUB_TOKEN,DEPLOY_GITHUB_TOKEN_B64,GITHUB_REPO
           script_stop: true
           script: |
-            APP_DIR="${{ vars.DEPLOY_PATH }}"
+            set -euo pipefail
+            APP_DIR="${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH }}"
             if [ -z "$APP_DIR" ]; then
               APP_DIR="/home/ubuntu/stockAlertBot"
             fi
+            echo "==> APP_DIR=$APP_DIR"
             cd "$APP_DIR"
-            if [ -f deploy/pull-and-restart.sh ]; then
-              bash deploy/pull-and-restart.sh
-            else
-              BRANCH="$(git branch --show-current)"
-              if [ -n "$DEPLOY_GITHUB_TOKEN_B64" ]; then
-                GITHUB_TOKEN="$(echo "$DEPLOY_GITHUB_TOKEN_B64" | base64 -d)"
-              elif [ -n "$DEPLOY_GITHUB_TOKEN" ]; then
-                GITHUB_TOKEN="$DEPLOY_GITHUB_TOKEN"
-              fi
-              if [ -n "${GITHUB_TOKEN:-}" ]; then
-                git pull --ff-only "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$BRANCH"
-              else
-                git pull --ff-only
-              fi
-              .venv/bin/pip install -r requirements.txt
-              sudo systemctl restart stock-bot
-              sudo systemctl is-active --quiet stock-bot
-              echo "Deploy complete"
+
+            if [ -n "${DEPLOY_GITHUB_TOKEN_B64:-}" ]; then
+              GITHUB_TOKEN="$(echo "$DEPLOY_GITHUB_TOKEN_B64" | base64 -d | tr -d '\r')"
+            elif [ -n "${DEPLOY_GITHUB_TOKEN:-}" ]; then
+              GITHUB_TOKEN="$(echo "$DEPLOY_GITHUB_TOKEN" | tr -d '\r')"
             fi
+            export GITHUB_TOKEN
+
+            BRANCH="$(git branch --show-current)"
+            echo "==> branch=$BRANCH repo=$GITHUB_REPO"
+
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+              git pull --ff-only "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$BRANCH"
+            else
+              echo "DEPLOY_GITHUB_TOKEN Secret이 없습니다." >&2
+              exit 1
+            fi
+
+            .venv/bin/pip install -r requirements.txt
+            sudo systemctl restart stock-bot
+            sudo systemctl is-active --quiet stock-bot
+            echo "Deploy complete"
