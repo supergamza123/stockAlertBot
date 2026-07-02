@@ -1,0 +1,72 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
+        run: |
+          KEY_FILE="$RUNNER_TEMP/deploy_key"
+          if [ -n "$SSH_KEY_B64" ]; then
+            echo "$SSH_KEY_B64" | base64 -d > "$KEY_FILE"
+          elif [ -n "$SSH_KEY" ]; then
+            printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+          else
+            echo "DEPLOY_SSH_KEY 또는 DEPLOY_SSH_KEY_B64 Secret이 필요합니다." >&2
+            exit 1
+          fi
+          chmod 600 "$KEY_FILE"
+          echo "key_file=$KEY_FILE" >> "$GITHUB_OUTPUT"
+        id: ssh_key
+
+      - name: Pull and restart on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_GITHUB_TOKEN: ${{ secrets.DEPLOY_GITHUB_TOKEN }}
+          DEPLOY_GITHUB_TOKEN_B64: ${{ secrets.DEPLOY_GITHUB_TOKEN_B64 }}
+          GITHUB_REPO: ${{ github.repository }}
+        with:
+          host: ${{ vars.DEPLOY_HOST }}
+          username: ${{ vars.DEPLOY_USER }}
+          key_path: ${{ steps.ssh_key.outputs.key_file }}
+          port: ${{ vars.DEPLOY_PORT != '' && vars.DEPLOY_PORT || 22 }}
+          envs: DEPLOY_GITHUB_TOKEN,DEPLOY_GITHUB_TOKEN_B64,GITHUB_REPO
+          script_stop: true
+          script: |
+            APP_DIR="${{ vars.DEPLOY_PATH }}"
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="/home/ubuntu/stockAlertBot"
+            fi
+            cd "$APP_DIR"
+            if [ -f deploy/pull-and-restart.sh ]; then
+              bash deploy/pull-and-restart.sh
+            else
+              BRANCH="$(git branch --show-current)"
+              if [ -n "$DEPLOY_GITHUB_TOKEN_B64" ]; then
+                GITHUB_TOKEN="$(echo "$DEPLOY_GITHUB_TOKEN_B64" | base64 -d)"
+              elif [ -n "$DEPLOY_GITHUB_TOKEN" ]; then
+                GITHUB_TOKEN="$DEPLOY_GITHUB_TOKEN"
+              fi
+              if [ -n "${GITHUB_TOKEN:-}" ]; then
+                git pull --ff-only "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$BRANCH"
+              else
+                git pull --ff-only
+              fi
+              .venv/bin/pip install -r requirements.txt
+              sudo systemctl restart stock-bot
+              sudo systemctl is-active --quiet stock-bot
+              echo "Deploy complete"
+            fi
