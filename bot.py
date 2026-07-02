@@ -28,6 +28,7 @@ from matplotlib import font_manager
 from toss_client import TossClient, TossAPIError
 import store
 from stock_map import lookup_code, reload_name_map
+from market_session import is_regular_market_hours
 from callisto_style import (
     build_quote_embed,
     build_chart_embed,
@@ -163,6 +164,7 @@ def fetch_quote(query: str) -> dict | None:
                 "change": change,
                 "change_pct": change_pct,
                 "currency": currency,
+                "after_hours": not is_regular_market_hours(symbol),
             }
         except Exception:
             continue
@@ -263,6 +265,7 @@ def generate_chart(query: str, period_key: str = "3mo") -> tuple[io.BytesIO, dic
                 "change_pct": change_pct,
                 "period_label": period_label,
                 "up": up,
+                "after_hours": not is_regular_market_hours(symbol),
             }
         except Exception:
             continue

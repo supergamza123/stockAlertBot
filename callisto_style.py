@@ -31,21 +31,77 @@ def _line(block: dict, key: str, **kwargs) -> str:
     return _fmt(raw, **kwargs)
 
 
-def _pick_quote_variant(templates: dict, change_pct: float) -> dict:
+def _quote_variant_key(templates: dict, change_pct: float) -> str:
     quote = templates.get("quote", {})
     if change_pct == 0:
-        base = quote.get("flat", {})
-    elif change_pct > 0:
-        base = dict(quote.get("up", {}))
-        pump = quote.get("pump", {})
-        if pump and change_pct >= float(pump.get("min_change_pct", 999)):
-            base.update({k: v for k, v in pump.items() if k != "min_change_pct"})
+        return "flat"
+
+    direction = "up" if change_pct > 0 else "down"
+    fallback = "up" if direction == "up" else "down"
+    variant_key = fallback
+    tiers = quote.get("tiers", {}).get(direction, [])
+
+    if tiers:
+        if direction == "up":
+            for tier in sorted(tiers, key=lambda t: t["min"], reverse=True):
+                if change_pct >= tier["min"]:
+                    variant_key = tier["variant"]
+                    break
+        else:
+            for tier in sorted(tiers, key=lambda t: t["max"]):
+                if change_pct <= tier["max"]:
+                    variant_key = tier["variant"]
+                    break
     else:
-        base = dict(quote.get("down", {}))
-        crash = quote.get("crash", {})
-        if crash and change_pct <= float(crash.get("min_change_pct", -999)):
-            base.update({k: v for k, v in crash.items() if k != "min_change_pct"})
-    return base
+        if change_pct > 0:
+            pump = quote.get("pump", {})
+            if pump and change_pct >= float(pump.get("min_change_pct", 999)):
+                variant_key = "pump"
+        else:
+            crash = quote.get("crash", {})
+            if crash and change_pct <= float(crash.get("min_change_pct", -999)):
+                variant_key = "crash"
+
+    return variant_key
+
+
+def _pick_quote_variant(templates: dict, change_pct: float) -> dict:
+    quote = templates.get("quote", {})
+    key = _quote_variant_key(templates, change_pct)
+    if change_pct == 0:
+        return dict(quote.get("flat", {}))
+    fallback = "up" if change_pct > 0 else "down"
+    return dict(quote.get(key, quote.get(fallback, {})))
+
+
+def _maybe_chance_line(block: dict, **kwargs) -> str:
+    if not block:
+        return ""
+    chance = float(block.get("chance", 0))
+    if chance <= 0 or random.random() > chance:
+        return ""
+    return _line(block, "line", **kwargs)
+
+
+def _random_best_stock(block: dict) -> str:
+    stocks = block.get("best_stocks", [])
+    if not stocks:
+        return block.get("best_stock_default", "그 종목")
+    return random.choice(stocks)
+
+
+def _maybe_pump_secret_line(templates: dict, change_pct: float) -> str:
+    block = templates.get("pump_secret", {})
+    if not block:
+        return ""
+    min_pct = float(block.get("min_change_pct", 15))
+    if change_pct < min_pct:
+        return ""
+    return _maybe_chance_line(block, best_stock=_random_best_stock(block))
+
+
+def _maybe_after_hours_line(templates: dict) -> str:
+    return _maybe_chance_line(templates.get("after_hours", {}))
 
 
 def _embed_color(up: bool, flat: bool = False) -> discord.Color:
@@ -65,6 +121,12 @@ def build_quote_embed(data: dict, format_price) -> discord.Embed:
     t = _pick_quote_variant(templates, change_pct)
     title = _line(t, "title", name=data["name"])
     subtitle = _line(t, "subtitle")
+    for extra in (
+        _maybe_after_hours_line(templates) if data.get("after_hours") else "",
+        _maybe_pump_secret_line(templates, change_pct),
+    ):
+        if extra:
+            subtitle = f"{subtitle}\n\n*{extra}*"
 
     embed = discord.Embed(
         title=title,
@@ -107,6 +169,10 @@ def build_chart_embed(data: dict, format_price) -> discord.Embed:
 
     title = _line(t, "title", name=data["name"], period=data["period_label"])
     subtitle = _line(t, "subtitle")
+    if data.get("after_hours"):
+        extra = _maybe_after_hours_line(templates)
+        if extra:
+            subtitle = f"{subtitle}\n\n*{extra}*"
 
     embed = discord.Embed(
         title=title,
