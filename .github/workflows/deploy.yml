@@ -66,7 +66,9 @@ jobs:
             echo "==> branch=$BRANCH repo=$GITHUB_REPO"
 
             if [ -n "${GITHUB_TOKEN:-}" ]; then
-              git pull --ff-only "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$BRANCH"
+              REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+              git fetch "$REMOTE" "$BRANCH"
+              git reset --hard "FETCH_HEAD"
             else
               echo "DEPLOY_GITHUB_TOKEN Secret이 없습니다." >&2
               exit 1

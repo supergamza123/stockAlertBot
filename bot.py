@@ -422,7 +422,7 @@ async def help_cmd(ctx: commands.Context):
     embed = discord.Embed(
         title="📈 주식 봇 명령어",
         description="*마에스트로 칼리스토가 시세를 읽어 드립니다. 팔 타이밍은… 보장 못 합니다.*",
-        color=discord.Color.from_rgb(0x4A90D9),
+        color=discord.Color(0x4A90D9),
     )
     embed.add_field(
         name=f"{PREFIX}주가 <종목>",

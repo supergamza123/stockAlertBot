@@ -104,6 +104,12 @@ def _maybe_after_hours_line(templates: dict) -> str:
     return _maybe_chance_line(templates.get("after_hours", {}))
 
 
+def _pick_one_line(*candidates: str) -> str:
+    """여러 후보 중 비어 있지 않은 문구 하나만 무작위 선택."""
+    options = [c.strip() for c in candidates if c and c.strip()]
+    return random.choice(options) if options else ""
+
+
 def _embed_color(up: bool, flat: bool = False) -> discord.Color:
     if flat:
         return discord.Color.light_grey()
@@ -120,17 +126,20 @@ def build_quote_embed(data: dict, format_price) -> discord.Embed:
 
     t = _pick_quote_variant(templates, change_pct)
     title = _line(t, "title", name=data["name"])
-    subtitle = _line(t, "subtitle")
-    for extra in (
+    flavor = _pick_one_line(
+        _line(t, "subtitle"),
+        _line(t, "field_change_note"),
         _maybe_after_hours_line(templates) if data.get("after_hours") else "",
         _maybe_pump_secret_line(templates, change_pct),
-    ):
-        if extra:
-            subtitle = f"{subtitle}\n\n*{extra}*"
+    )
+
+    description = f"`{data['symbol']}`"
+    if flavor:
+        description = f"{description}\n{flavor}"
 
     embed = discord.Embed(
         title=title,
-        description=f"`{data['symbol']}`\n{subtitle}",
+        description=description,
         color=_embed_color(up, flat),
     )
     embed.add_field(name="현재가", value=format_price(data["price"], data["currency"]), inline=True)
@@ -141,10 +150,9 @@ def build_quote_embed(data: dict, format_price) -> discord.Embed:
         change=format_price(data["change"], data["currency"]),
         change_pct=f"{data['change_pct']:.2f}",
     )
-    note = _line(t, "field_change_note")
     embed.add_field(
         name=t.get("field_change_name", "등락"),
-        value=f"{change_val}\n*{note}*" if note else change_val,
+        value=change_val,
         inline=True,
     )
     embed.add_field(
@@ -168,24 +176,27 @@ def build_chart_embed(data: dict, format_price) -> discord.Embed:
     t = chart.get("flat" if flat else ("up" if up else "down"), {})
 
     title = _line(t, "title", name=data["name"], period=data["period_label"])
-    subtitle = _line(t, "subtitle")
-    if data.get("after_hours"):
-        extra = _maybe_after_hours_line(templates)
-        if extra:
-            subtitle = f"{subtitle}\n\n*{extra}*"
+    flavor = _pick_one_line(
+        _line(t, "subtitle"),
+        _line(t, "field_period_note"),
+        _maybe_after_hours_line(templates) if data.get("after_hours") else "",
+    )
+
+    description = f"`{data['symbol']}`"
+    if flavor:
+        description = f"{description}\n{flavor}"
 
     embed = discord.Embed(
         title=title,
-        description=f"`{data['symbol']}`\n{subtitle}",
+        description=description,
         color=_embed_color(up, flat),
     )
     embed.add_field(name="현재가", value=format_price(data["last"], data["currency"]), inline=True)
 
     period_val = f"{sign}{data['change_pct']:.2f}%"
-    note = _line(t, "field_period_note")
     embed.add_field(
         name=t.get("field_period_name", "{period} 변동").format(period=data["period_label"]),
-        value=f"{period_val}\n*{note}*" if note else period_val,
+        value=period_val,
         inline=True,
     )
     embed.set_footer(text=t.get("footer", "Yahoo Finance"))
