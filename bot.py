@@ -179,30 +179,52 @@ def format_price(value: float, currency: str) -> str:
     return f"{value:,.2f} {currency}".strip()
 
 
-# 차트 기간 별칭 -> (yfinance period, interval, 표시 이름)
+# 차트 기간 별칭 -> (yfinance period, interval, 표시 이름[, resample])
+# resample: Yahoo에 없는 봉(예: 4h)은 가져온 뒤 리샘플
 PERIOD_OPTIONS = {
+    "15m": ("5d", "15m", "15분"),
+    "15분": ("5d", "15m", "15분"),
+    "1h": ("1mo", "1h", "1시간"),
+    "1시간": ("1mo", "1h", "1시간"),
+    "60m": ("1mo", "1h", "1시간"),
+    "4h": ("60d", "1h", "4시간", "4h"),
+    "4시간": ("60d", "1h", "4시간", "4h"),
     "1d": ("1d", "5m", "1일"),
+    "1일": ("1d", "5m", "1일"),
     "5d": ("5d", "30m", "5일"),
-    "1w": ("5d", "30m", "5일"),
+    "5일": ("5d", "30m", "5일"),
+    "7d": ("7d", "1h", "1주"),
+    "7일": ("7d", "1h", "1주"),
+    "1w": ("7d", "1h", "1주"),
+    "1wk": ("7d", "1h", "1주"),
+    "1week": ("7d", "1h", "1주"),
+    "1주": ("7d", "1h", "1주"),
+    "주": ("7d", "1h", "1주"),
+    "일주일": ("7d", "1h", "1주"),
     "1mo": ("1mo", "1d", "1개월"),
     "1m": ("1mo", "1d", "1개월"),
+    "1개월": ("1mo", "1d", "1개월"),
     "3mo": ("3mo", "1d", "3개월"),
     "3m": ("3mo", "1d", "3개월"),
+    "3개월": ("3mo", "1d", "3개월"),
     "6mo": ("6mo", "1d", "6개월"),
     "6m": ("6mo", "1d", "6개월"),
+    "6개월": ("6mo", "1d", "6개월"),
     "1y": ("1y", "1d", "1년"),
     "1년": ("1y", "1d", "1년"),
     "ytd": ("ytd", "1d", "올해"),
     "5y": ("5y", "1wk", "5년"),
+    "5년": ("5y", "1wk", "5년"),
     "max": ("max", "1mo", "전체"),
+    "전체": ("max", "1mo", "전체"),
 }
 
 
 def generate_chart(query: str, period_key: str = "3mo") -> tuple[io.BytesIO, dict] | None:
     """종목의 주가 추이 차트를 PNG 이미지(BytesIO)로 생성해서 반환."""
-    period, interval, period_label = PERIOD_OPTIONS.get(
-        period_key.lower(), PERIOD_OPTIONS["3mo"]
-    )
+    option = PERIOD_OPTIONS.get(period_key.lower(), PERIOD_OPTIONS["3mo"])
+    period, interval, period_label = option[0], option[1], option[2]
+    resample = option[3] if len(option) > 3 else None
 
     for symbol in resolve_symbols(query):
         try:
@@ -214,6 +236,10 @@ def generate_chart(query: str, period_key: str = "3mo") -> tuple[io.BytesIO, dic
             closes = hist["Close"].dropna()
             if closes.empty:
                 continue
+            if resample:
+                closes = closes.resample(resample).last().dropna()
+                if closes.empty:
+                    continue
 
             currency = getattr(ticker.fast_info, "currency", None) or ""
 
@@ -305,10 +331,18 @@ async def stock(ctx: commands.Context, *, query: str = ""):
 @bot.command(name="차트", aliases=["chart", "그래프", "graph"])
 async def chart(ctx: commands.Context, query: str = "", period_key: str = "3mo"):
     """주가 추이 그래프를 보여줍니다. 예: !차트 삼성전자 6mo / !차트 AAPL 1y"""
+    period_help = "15m, 1h, 4h, 1d, 5d, 1주, 1mo, 3mo, 6mo, 1y, ytd, 5y, max"
     if not query:
         await ctx.send(
             f"❓ 종목을 입력해 주세요. 예: `{PREFIX}차트 삼성전자 3mo` 또는 `{PREFIX}차트 AAPL 1y`\n"
-            "기간: 1d, 5d, 1mo, 3mo, 6mo, 1y, ytd, 5y, max"
+            f"기간: {period_help}"
+        )
+        return
+
+    if period_key.lower() not in PERIOD_OPTIONS:
+        await ctx.send(
+            f"❓ 지원하지 않는 기간이에요: `{period_key}`\n"
+            f"기간: {period_help}"
         )
         return
 
@@ -435,8 +469,8 @@ async def help_cmd(ctx: commands.Context):
     embed.add_field(
         name=f"{PREFIX}차트 <종목> [기간]",
         value=(
-            "주가 추이 그래프를 보여줍니다. 기간: 1d, 5d, 1mo, 3mo, 6mo, 1y, ytd, 5y, max\n"
-            f"예) `{PREFIX}차트 삼성전자 6mo`, `{PREFIX}차트 AAPL 1y`"
+            "주가 추이 그래프를 보여줍니다. 기간: 15m, 1h, 4h, 1d, 5d, 1주, 1mo, 3mo, 6mo, 1y, ytd, 5y, max\n"
+            f"예) `{PREFIX}차트 삼성전자 1h`, `{PREFIX}차트 AAPL 4h`"
         ),
         inline=False,
     )
